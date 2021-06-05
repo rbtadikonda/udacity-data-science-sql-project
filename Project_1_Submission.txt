@@ -1,0 +1,148 @@
+*********************************************************************************************
+Query 1 : 
+   What is the rental count for Family Movies?
+=============================================================================================
+WITH family_movies AS
+   ( SELECT cat.name category
+       FROM category cat
+       WHERE cat.name IN ('Animation', 'Children', 'Classics', 'Comedy', 'Family', 'Music')
+    )
+
+SELECT cat.name, count(rntl.rental_id) num_times_rented_out
+  FROM film flm
+  JOIN film_category fc
+    ON flm.film_id = fc.film_id
+  JOIN category cat
+    ON cat.category_id = fc.category_id
+  JOIN inventory inv
+    ON inv.film_id = flm.film_id
+  JOIN rental rntl
+    ON rntl.inventory_id = inv.inventory_id
+  WHERE cat.name IN ( SELECT category FROM family_movies )
+  GROUP BY cat.name
+  ORDER BY cat.name
+
+==========================================================================================
+
+
+
+************************************************************************************************************
+QUERY 2:
+    Rental count distribution for family friendly movies based on rental duration
+
+==========================================================================================================
+WITH family_movies AS (
+       SELECT cat.name category_name
+         FROM category cat
+        WHERE cat.name IN ('Animation', 'Children', 'Classics', 'Comedy', 'Family', 'Music')
+    ),
+
+   rental_duration AS (
+     SELECT flm.title, cat.name as category_name, flm.rental_duration, NTILE(4) OVER ( ORDER BY flm.rental_duration) AS quartile
+       FROM film flm
+       JOIN film_category fc
+         ON flm.film_id = fc.film_id
+       JOIN category cat
+         ON cat.category_id = fc.category_id
+      WHERE cat.name IN (SELECT category_name FROM family_movies)
+      ORDER BY flm.rental_duration
+   )
+  
+SELECT rd.category_name AS "Category", rd.quartile AS "Rental Length Category", count(*) AS "Count"
+  FROM rental_duration rd
+  GROUP BY 1, 2
+  ORDER BY 1, 2
+
+
+==========================================================================================================
+*********************************************************************************************************
+Supporting Query 2 :
+    Provide a table with the movie titles and divide them into 4 levels (first_quarter, second_quarter, third_quarter, and final_quarter) 
+based on the quartiles (25%, 50%, 75%) of the rental duration for movies across all categories
+============================================================================================================
+
+WITH family_movies AS
+   ( SELECT cat.name category_name
+       FROM category cat
+       WHERE cat.name IN ('Animation', 'Children', 'Classics', 'Comedy', 'Family', 'Music')
+    )
+
+SELECT flm.title, cat.name, flm.rental_duration, CASE
+                                                   WHEN NTILE(4) OVER ( ORDER BY flm.rental_duration) = 1 THEN 'first_quarter' 
+                                                   WHEN NTILE(4) OVER ( ORDER BY flm.rental_duration) = 2 THEN 'second_quarter'
+                                                   WHEN NTILE(4) OVER ( ORDER BY flm.rental_duration) = 3 THEN 'third_quarter' 
+                                                   WHEN NTILE(4) OVER ( ORDER BY flm.rental_duration) = 4 THEN 'final_quarter'
+                                                 END  AS quartile
+  FROM film flm
+  JOIN film_category fc
+    ON flm.film_id = fc.film_id
+  JOIN category cat
+    ON cat.category_id = fc.category_id
+  WHERE cat.name IN (SELECT category_name FROM family_movies)
+  ORDER BY flm.rental_duration
+============================================================================================================
+
+************************************************************************************************************
+Query 3 :
+   Find number of movies not yet returned for each store
+===========================================================================================================
+SELECT i.store_id,  count(*) as unreturned_items
+   FROM inventory i
+   JOIN rental r
+     ON i.inventory_id = r.inventory_id
+   JOIN customer c
+     ON c.customer_id = r.customer_id
+   WHERE r.return_date IS NULL
+   GROUP BY i.store_id
+   ORDER BY store_id
+============================================================================================================
+
+***********************************************************************************************************
+Query 4 :
+   Top Five customers' payment trends for rentals on month-to-month basis
+==========================================================================================================
+WITH
+  top_10_customers AS (
+    SELECT cust.customer_id, concat(cust.first_name, ' ', cust.last_name) AS customer_name, SUM(pymt.amount) total_payment
+      FROM customer cust
+      JOIN payment pymt
+        ON pymt.customer_id = cust.customer_id
+      GROUP BY 1 
+      ORDER BY 3 DESC 
+      LIMIT 5
+  ),
+  
+  top10_cust_monthly_payments AS (
+    SELECT t10cust.customer_name customer_name, DATE_TRUNC('month', pymt.payment_date) payment_month, SUM(pymt.amount) monthly_payment 
+      FROM payment pymt
+      JOIN top_10_customers t10cust
+        ON pymt.customer_id = t10cust.customer_id
+     GROUP BY 2, 1
+     ORDER BY 1
+  ),
+
+  payment_trends AS (
+    SELECT 
+      CASE 
+        WHEN extract(month from tcmp.payment_month) = 1  THEN 'JAN'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 2  THEN 'FEB'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 3  THEN 'MAR'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 4  THEN 'APR'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 5  THEN 'MAY'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 6  THEN 'JUN'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 7  THEN 'JUL'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 8  THEN 'AUG'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 9  THEN 'SEP'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 10 THEN 'OCT'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 10 THEN 'NOV'  || ', ' || extract(year from tcmp.payment_month)
+        WHEN extract(month from tcmp.payment_month) = 10 THEN 'DEC'  || ', ' || extract(year from tcmp.payment_month)
+      END AS payment_month_year,  
+      tcmp.customer_name, 
+      tcmp.monthly_payment, 
+      COALESCE(LAG(tcmp.monthly_payment) OVER (partition by customer_name ORDER BY customer_name), 0) as prev_month_pymt
+    FROM top10_cust_monthly_payments tcmp
+  )
+
+  SELECT payment_month_year "Month, Year", customer_name "Customer Name", monthly_payment "Payment Current Month", 
+         prev_month_pymt "Payment Previous Month", (monthly_payment - prev_month_pymt) "Difference from Previous Month"
+    FROM payment_trends
